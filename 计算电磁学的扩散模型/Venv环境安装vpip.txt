@@ -1,0 +1,19 @@
+ & "C:\Users\saimyy yyi\AppData\Local\Programs\Python\Python311\python.exe" -m venv .venv
+
+ ls .\.venv
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+.\.venv\Scripts\Activate.ps1
+
+python -c "import fdtd; print('fdtd:', fdtd.__file__); print([x for x in dir(fdtd) if 'pml' in x.lower() or 'boundary' in x.lower()])"
+
+ python -c "import sys; print(sys.executable)"
+出现“\.venv\Scripts\python.exe”才算成功，再检查版本pip --version
+
+pip install fdtd
+
+python -c "import fdtd; print('fdtd ok:', fdtd.__file__)"再次核对
+
+python -c "import fdtd; print([x for x in dir(fdtd) if 'pml' in x.lower() or 'boundary' in x.lower()])"
+PML安装核对
