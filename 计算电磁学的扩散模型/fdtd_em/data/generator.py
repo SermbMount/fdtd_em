@@ -2,6 +2,7 @@ import os
 import json
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 from datetime import datetime
 from tqdm import tqdm
 
@@ -11,110 +12,122 @@ from fdtd_em.core.grid import Grid
 from fdtd_em.components.detectors import FieldPlaneDetector
 from fdtd_em.utils.cfl import max_stable_dt
 
-
-def generate_random_parameters():
-    """随机生成物理参数和介质球参数"""
-    # 光源位置
-    src_idx = int(cfg.Nx * 0.2)
-    # 兼容配置中的周期
-    src_period = float((getattr(cfg, 'src_period_min', 10.0) + getattr(cfg, 'src_period_max', 30.0)) / 2)
-
-    # 随机生成球体参数
-    center_x = int(cfg.Nx * 0.5)
-    center_y = int(cfg.Ny * 0.5)
-    center_z = int(cfg.Nz * 0.5)
-    radius = float(np.random.uniform(5.0, 15.0))
-    eps_r = float(np.random.uniform(2.0, cfg.eps_r_max))
-
-    return {
-        "source_index": src_idx,
-        "source_period": src_period,
-        "center": [center_x, center_y, center_z],
-        "radius": radius,
-        "eps_r": eps_r
-    }
-
-
 def run_single_simulation(sample_id, output_dir, device="cuda"):
-    params = generate_random_parameters()
+    # 1. 物理参数随机化 (光源与介电常数)
+    current_src_index = int(np.random.randint(cfg.src_index_min, cfg.src_index_max))
+    current_src_period = float(np.random.uniform(cfg.src_period_min, cfg.src_period_max))
+    eps_r_val = float(np.random.uniform(cfg.eps_r_min, cfg.eps_r_max))
 
-    # 1. 初始化 FDTD 物理网格配置
+    # 2. 初始化 FDTD 物理网格配置
     dx = cfg.dx
     dt = max_stable_dt(dx, dx, dx) * cfg.dt_factor
 
     sim_cfg = SimulationConfig(
         Nx=cfg.Nx, Ny=cfg.Ny, Nz=cfg.Nz,
         dx=dx, dt=dt,
-        steps=getattr(cfg, 'time_steps', 300),
-        src_axis=getattr(cfg, 'src_axis', 'x'),
-        src_index=params["source_index"],
-        src_period=params["source_period"],
-        src_amplitude=getattr(cfg, 'src_amplitude', 1.0),
-        pml_thickness=getattr(cfg, 'pml_thickness', 10),
-        execution_mode=getattr(cfg, 'execution_mode', 'cuda'),
+        steps=cfg.steps,
+        src_axis=cfg.src_axis,
+        src_index=current_src_index,
+        src_period=current_src_period,
+        src_amplitude=cfg.src_amplitude,
+        pml_thickness=cfg.pml_thickness,
+        execution_mode=cfg.execution_mode,
     )
     g = Grid(sim_cfg)
-
-    # 2. 注入介质体 (直接在张量层操作，杜绝任何 Geometry 模块找不到的 Bug)
     grid_device = g.grid.inverse_permittivity.device
-    Z, Y, X = torch.meshgrid(
-        torch.arange(cfg.Nz, device=grid_device),
-        torch.arange(cfg.Ny, device=grid_device),
-        torch.arange(cfg.Nx, device=grid_device),
-        indexing='ij'
-    )
-    cx, cy, cz = params["center"]
-    # 构建球体掩码并赋予介电常数
-    mask = ((X - cx) ** 2 + (Y - cy) ** 2 + (Z - cz) ** 2) <= params["radius"] ** 2
-    g.grid.inverse_permittivity[mask] = 1.0 / params["eps_r"]
 
-    # 3. 部署近场探测器
-    reflect_plane = FieldPlaneDetector(name="reflect", axis='x', index=int(cfg.Nx * 0.1), to_cpu=True)
-    trans_plane = FieldPlaneDetector(name="trans", axis='x', index=int(cfg.Nx * 0.9), to_cpu=True)
+    # 3. 【核心解耦：动态挂载几何体】
+    my_structure = cfg.build_custom_structure(is_batch_generation=True)
 
-    reflect_plane.attach(g.grid)
-    trans_plane.attach(g.grid)
-    g.add_detector(reflect_plane)
-    g.add_detector(trans_plane)
+    # 提取结构的形状掩码，并注入介电常数
+    mask = my_structure.mask(shape=(cfg.Nx, cfg.Ny, cfg.Nz), device=grid_device)
+    g.grid.inverse_permittivity[mask] = 1.0 / eps_r_val
 
-    # 4. 执行仿真
+    # 4. 挂载探测器
+    detectors = []
+    regions = cfg.detector_region.regions if hasattr(cfg.detector_region, 'regions') else [cfg.detector_region]
+
+    for i, reg in enumerate(regions):
+        det = FieldPlaneDetector(
+            name=f"Detector_{i}",
+            axis=reg.axis,
+            index=reg.index,
+            stride=getattr(cfg, "detector_stride", 1),
+            to_cpu=True
+        )
+        det.attach(g.grid)
+        g.add_detector(det)
+        detectors.append(det)
+
+    # 5. 执行仿真
     g.run()
 
-    # 5. 提取数据与保存
-    reflect_plane.sample(g.grid)
-    trans_plane.sample(g.grid)
+    # 6. 数据提取与合并
+    field_planes = []
+    for det in detectors:
+        det.sample(g.grid)
+        field_planes.append(det.last_map.cpu().numpy())
 
-    # 提取场图矩阵
-    E_ref = reflect_plane.last_map.cpu().numpy()
-    E_trans = trans_plane.last_map.cpu().numpy()
+    # 将多个面合并为一个多通道张量 (C, H, W)
+    combined_field = np.stack(field_planes, axis=0)
 
     sample_path = os.path.join(output_dir, f"sample_{sample_id:05d}")
     os.makedirs(sample_path, exist_ok=True)
 
-    # 拼装为双通道张量 [2, H, W] 并保存
-    field_map = torch.tensor(np.stack([E_ref, E_trans], axis=0), dtype=torch.float32)
-    torch.save(field_map, os.path.join(sample_path, "field_map.pt"))
+    # 7. 落盘保存 (含 Matplotlib 出图)
+    
+    # 7.1 保存真实电磁场数据张量 [2, H, W]
+    field_map_tensor = torch.tensor(combined_field, dtype=torch.float32)
+    torch.save(field_map_tensor, os.path.join(sample_path, "field_map.pt"))
 
-    # 保存物理条件标签
+    # 7.2 保存 2D 介质掩码作为条件标签
+    structure_slice = mask[:, :, cfg.Nz // 2].cpu().numpy() * eps_r_val
+    np.save(os.path.join(sample_path, "structure_mask.npy"), structure_slice)
+
+    # 7.3 生成并保存对比图
+    fig, axes = plt.subplots(1, len(detectors), figsize=(10, 5))
+    names = ["Reflection", "Transmission"]
+    for idx, ax in enumerate(axes):
+        im = ax.imshow(combined_field[idx], cmap="viridis", origin="lower")
+        ax.set_title(names[idx] if idx < len(names) else f"Plane {idx}")
+        plt.colorbar(im, ax=ax)
+    plt.tight_layout()
+    plt.savefig(os.path.join(sample_path, "field_map_dual.png"), dpi=150)
+    plt.close()
+
+    # 7.4 保存物理参数 JSON
+    params = {
+        "source_index": current_src_index,
+        "source_period": current_src_period,
+        "eps_r": eps_r_val,
+        "shape_type": "dynamic_from_config",
+        "detector_info": [{"axis": r.axis, "index": r.index} for r in regions]
+    }
     with open(os.path.join(sample_path, "structure.json"), "w") as f:
         json.dump(params, f, indent=4)
 
-
 def main():
-    print(f" 启动 FDTD 数据引擎 ")
+    print(f" 启动 FDTD 物理引擎 | 设备: {cfg.execution_mode}")
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dataset_dir = os.path.join("dataset", timestamp, "samples")
     os.makedirs(dataset_dir, exist_ok=True)
 
-    num_samples = getattr(cfg, 'num_samples', 10)
-    print(f" 计划极速生成 {num_samples} 个样本...")
+    batch_dir = os.path.join("dataset", timestamp)
+    with open(os.path.join(batch_dir, "config.json"), "w") as f:
+        json.dump({
+            "Nx": cfg.Nx,
+            "samples": cfg.num_samples,
+            "steps": cfg.steps,
+            "detector_type": type(cfg.detector_region).__name__
+        }, f, indent=2)
 
-    for i in tqdm(range(num_samples), desc="Simulating FDTD"):
+    print(f" 计划生成 {cfg.num_samples} 个样本...")
+
+    for i in tqdm(range(cfg.num_samples), desc="Simulating FDTD"):
         run_single_simulation(i, dataset_dir)
 
-    print(" 全部物理数据生成完毕！")
-
+    print(" 物理数据集生成完毕！")
 
 if __name__ == "__main__":
     main()
