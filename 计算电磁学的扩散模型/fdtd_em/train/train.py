@@ -1,100 +1,103 @@
 import os
 import glob
-import json
-import shutil
 import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader
 from pathlib import Path
-from tqdm import tqdm
 from datetime import datetime
 
-import fdtd_em.config.generation_config as cfg
+from fdtd_em.config import generation_config as cfg
 from fdtd_em.train.dataset import MyDataset
 from fdtd_em.train.model import ConditionalDDPM
 
 
-def find_latest_dataset(root="dataset"):
-    #该代码优先找最新的数据进行训练
-    all_runs = glob.glob(os.path.join(root, "20*/samples"))
-    if not all_runs:
-        raise FileNotFoundError("未找到任何样本目录，请先运行 generator.py 生成数据。")
-    return sorted(all_runs)[-1]
+def get_latest_dataset(root="dataset"):
+    runs = glob.glob(os.path.join(root, "20*"))
+    if not runs:
+        raise FileNotFoundError("未找到数据集，请先运行 run_pipeline.py 生成数据。")
+    latest_run = sorted(runs)[-1]
+    return os.path.join(latest_run, "samples")
 
 
 def main():
-    DATASET_ROOT = find_latest_dataset()
-    data_dir = Path(DATASET_ROOT)
-    train_files = [p for p in data_dir.iterdir() if p.is_dir()]
-
-    print(f"在 {data_dir} 找到训练样本文件数: {len(train_files)}")
-
-    train_dataset = MyDataset(train_files)
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=cfg.batch_size,
-        shuffle=True,
-        pin_memory=True,
-        num_workers=0,
-    )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"============== 开始训练 (U-Net + 物理参数注入模式) ==============")
-    if device == "cuda":
-        print(f" 正在使用 GPU: {torch.cuda.get_device_name(0)}")
+    print(f" 启动带有 PINN 物理约束的 DDPM 训练 | 设备: {device}")
 
-    model = ConditionalDDPM(n_steps=cfg.diffusion_steps, device=device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
+    # 1. 加载数据集
+    samples_dir = get_latest_dataset()
+    train_files = [p for p in Path(samples_dir).iterdir() if p.is_dir()]
+    print(f" 找到 {len(train_files)} 个训练样本。")
 
+    dataset = MyDataset(train_files)
+    dataloader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+
+    # 获取数据集的全局场图统计量 (用于物理损失的反归一化)
+    f_min, f_max = dataset.field_min, dataset.field_max
+    print(f" 物理场量级范围: {f_min:.4e} 到 {f_max:.4e} V/m")
+
+    # 2. 初始化带物理约束的模型
+    # target_dim=1 表示我们要预测的是单通道的结构图 (如果逆推结构)
+    # 若你的目标是正向预测场图，target_dim 应为 2。此处以正向代理模型训练为例：
+    model = ConditionalDDPM(target_dim=2, cond_dim=1, n_steps=cfg.diffusion_steps, device=device)
+    model.to(device)
+
+    optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs)
+
+    # 3. 创建保存目录
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    ckpt_dir = os.path.join("checkpoints", timestamp)
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    # 4. 开始训练循环
+    print(" 开始训练...")
     for epoch in range(cfg.epochs):
         model.train()
-        epoch_loss = 0.0
+        total_epoch_loss = 0.0
+        total_mse_loss = 0.0
+        total_phys_loss = 0.0
 
-        # 1：接收 3 个变量 (结构图, 场图, 物理条件)
-        for batch_idx, (structures, field_maps, phys_conds) in enumerate(
-                tqdm(train_loader, desc=f"Epoch {epoch + 1}/{cfg.epochs}")):
-
+        for batch_idx, (fields, structures, phys_conds) in enumerate(dataloader):
+            fields = fields.to(device)
             structures = structures.to(device)
-            field_maps = field_maps.to(device)
-            phys_conds = phys_conds.to(device)  # 将物理条件推入显存
+            phys_conds = phys_conds.to(device)
 
             optimizer.zero_grad()
-            # 2：将物理条件喂给 loss 函数
-            loss = model.get_loss(x_0=field_maps, img_cond=structures, phys_cond=phys_conds)
+
+            # 核心修改：传入 f_min, f_max 激活 Helmholtz 物理损失
+            # 注意：此处假设你的正向任务是预测 fields (x0), 条件是 structures (img_cond)
+            loss, mse_loss, phys_loss = model.get_loss(fields, structures, phys_conds, f_min, f_max)
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 防止梯度爆炸
             optimizer.step()
 
-            epoch_loss += loss.item()
+            total_epoch_loss += loss.item()
+            total_mse_loss += mse_loss.item()
+            total_phys_loss += phys_loss.item()
 
-            if (batch_idx + 1) % 10 == 0:
-                print(f"  Epoch {epoch + 1}, Step {batch_idx + 1}: 去噪 Loss = {epoch_loss / (batch_idx + 1):.6f}")
+        scheduler.step()
 
-        epoch_loss /= (batch_idx + 1 if batch_idx >= 0 else 1)
-        print(f"Epoch {epoch + 1} 结束: 平均 Loss = {epoch_loss:.6f}")
+        # 打印详细损失
+        num_batches = len(dataloader)
+        avg_loss = total_epoch_loss / num_batches
+        avg_mse = total_mse_loss / num_batches
+        avg_phys = total_phys_loss / num_batches
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    save_dir = os.path.join("checkpoints", timestamp)
-    os.makedirs(save_dir, exist_ok=True)
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"Epoch [{epoch + 1}/{cfg.epochs}] | LR: {scheduler.get_last_lr()[0]:.2e} | "
+                  f"Total Loss: {avg_loss:.4f} (MSE: {avg_mse:.4f}, Phys: {avg_phys:.4e})")
 
-    # 1. 保存模型权重字典
-    model_path = os.path.join(save_dir, "3d_fdtd_model.pth")
-    torch.save(model.state_dict(), model_path)
+        # 定期保存权重
+        if (epoch + 1) % 50 == 0 or epoch == cfg.epochs - 1:
+            save_path = os.path.join(ckpt_dir, f"diffusion_model_ep{epoch + 1}.pth")
+            torch.save(model.state_dict(), save_path)
 
-    # 2. 保存训练配置记录 JSON
-    config_record = {
-        "device": device,
-        "epochs": cfg.epochs,
-        "batch_size": cfg.batch_size,
-        "learning_rate": cfg.learning_rate,
-        "diffusion_steps": cfg.diffusion_steps,
-        "dataset": str(data_dir),
-        "model_file": "3d_fdtd_model.pth",
-        "model_type": "Physics_Informed_ConditionalUNet"
-    }
-    with open(os.path.join(save_dir, "training_record.json"), "w") as f:
-        json.dump(config_record, f, indent=2)
+    # 训练结束保存最终版本
+    final_path = os.path.join(ckpt_dir, "3d_fdtd_model.pth")
+    torch.save(model.state_dict(), final_path)
+    print(f" 训练完成！最终权重已保存至: {final_path}")
 
-    shutil.copy("fdtd_em/config/generation_config.py", os.path.join(save_dir, "saved_config.py"))
-
-    print(f"训练完成！模型与配置已归档至文件夹: {save_dir}")
 
 if __name__ == "__main__":
     main()
