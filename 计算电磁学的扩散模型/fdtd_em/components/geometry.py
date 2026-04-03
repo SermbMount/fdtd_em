@@ -11,10 +11,6 @@ def add_sphere(grid, center, radius, eps_r):
     Nx, Ny, Nz = grid.shape
     cx, cy, cz = center  # 解包中心坐标
 
-    # 1. 检查 grid 中的数组是 Tensor 还是 Numpy
-    # fdtd 库初始化时通常是 numpy，set_backend 后才变 tensor
-
-
     is_torch_tensor = False
     device = "cpu"
 
@@ -45,5 +41,4 @@ def add_sphere(grid, center, radius, eps_r):
 
         sphere_mask = (X - cx) ** 2 + (Y - cy) ** 2 + (Z - cz) ** 2 <= radius ** 2
 
-        # 修改介电常数
         grid.inverse_permittivity[sphere_mask] = 1.0 / eps_r
