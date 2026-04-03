@@ -38,3 +38,27 @@ class PlaneWaveSource:
             grid[pml:nx-pml, self.index, pml:nz-pml] = src
 
         print(f" [激励源注入] 轴向:{self.axis}, 物理周期:{real_period_seconds:.2e}s")
+
+
+@dataclass
+class PointSource:
+    center: tuple = (60, 60, 25)
+    period: int = 20
+    amplitude: float = 1.0
+    name: str = "inc_point"
+
+    def apply(self, grid: fdtd.Grid) -> None:
+        # dt 是每个时间步的真实长度
+        dt = max_stable_dt(cfg.dx, cfg.dx, cfg.dx) * cfg.dt_factor
+        real_period_seconds = self.period * dt
+        cx, cy, cz = self.center
+        # 生成物理点源 (调用底层 fdtd 库的 PointSource)
+        src = fdtd.PointSource(
+            period=real_period_seconds,
+            amplitude=self.amplitude,
+            name=self.name
+        )
+        # 挂载到网格的绝对坐标点上 (平面波是切片，点源只需定在一个网格里)
+        grid[cx, cy, cz] = src
+
+        print(f" [激励源注入] 点源 (Point), 坐标:({cx}, {cy}, {cz}), 物理周期:{real_period_seconds:.2e}s")
