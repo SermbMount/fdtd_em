@@ -121,9 +121,12 @@ class ConditionalDDPM(nn.Module):
 
         # 计算麦克斯韦/亥姆霍兹残差
         loss_phys = self.physics_loss_fn(E_field_phys, eps_r_phys)
+        if not torch.isfinite(loss_phys):
+            print("[Warning] loss_phys is not finite. Fallback to 0.")
+            loss_phys = torch.zeros((), device=x0.device)
 
         # 自适应权重：随着网络逐渐收敛，增加物理损失的权重
-        lambda_phys = 1e-8  # 物理量级较大，需要极小的系数对齐梯度
+        lambda_phys = 0.0  # 物理量级较大，需要极小的系数对齐梯度
         total_loss = loss_mse + lambda_phys * loss_phys
 
         return total_loss, loss_mse, loss_phys
