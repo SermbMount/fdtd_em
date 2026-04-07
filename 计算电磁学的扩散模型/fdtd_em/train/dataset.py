@@ -81,7 +81,7 @@ class MyDataset(Dataset):
         # 结构图归一化到 [-1, 1]
         # 当前生成器里 structure_slice = mask * eps_r_val
         # 背景是 0，目标区域是 eps_r
-        norm_structure = 2.0 * norm_structure / cfg.eps_r_max - 1.0
+        norm_structure = 2.0 * (norm_structure - 1.0) / (cfg.eps_r_max - 1.0) - 1.0
 
         # 3. 读取场图
         field_map_path = os.path.join(sample_dir, "field_map.pt")
