@@ -2,7 +2,7 @@
  计算电磁学的扩散模型 (Diffusion-Based Electromagnetic Inverse Design)
 
 
-## 1. 项目简介 (Introduction) ##
+ 1. 项目简介 (Introduction) ##
 本项目致力于解决计算电磁学中的“逆向设计 (Inverse Design)”问题。
 
 传统的电磁器件设计通常依赖于经验直觉或耗时的启发式优化算法，需要反复调用正向物理求解器
@@ -11,7 +11,7 @@
 
 只需输入期望的二维电磁场分布图，模型即可在数秒钟内从纯噪声中直接生成对应的三维物理结构参数。
 
-## 2. 核心算法与数据流 (Core Algorithm & Data Pipeline) ##
+ 2. 核心算法与数据流 (Core Algorithm & Data Pipeline) ##
 
 正向物理引擎：基于 PyTorch 加速的 FDTD (时域有限差分) 求解器，支持 CUDA 硬件加速。
 
@@ -29,20 +29,49 @@
 项目采用高度解耦的面向对象设计 (OOP)：
 
 ```
-├── fdtd_em/
-│   ├── config/
-│   │   └── generation_config.py        全局控制台：网格、PML、光源、探测器坐标
-│   ├── data/
-│   │   └── generator.py                调用 FDTD 引擎批量生成双通道物理数据集
-│   ├── train/
-│   │   ├── dataset.py                  解析 numpy 数据并转化为 Tensor
-│   │   ├── model.py                    包含 ConditionalUNet 与 DDPM 核心算法
-│   │   └── train.py                    执行扩散模型训练与 Loss 监控
-│   └── examples/
-│       ├── preview_setup.py            场景预览：快速渲染 3D 物理空间与传感器位置直观
-│       └── test_forward_surrogate.py   加载权重，进行正向物理预测与可视化对比
-├── run_pipeline.py                     总控开关
-└── README.md                        
+fdtd_em/
+├── config/
+│   └── generation_config.py
+│       # 全局参数配置：网格尺寸、时间步、PML、光源、探测器、材料范围、训练超参数
+│
+├── data/
+│   └── generator.py
+│       # 调用 FDTD 引擎批量生成训练样本
+│       # 每个样本包含：
+│       #   - field_map.pt         双探测平面场图
+│       #   - structure_mask.npy  二维介电常数投影图
+│       #   - structure.json      物理条件与探测器信息
+│
+├── train/
+│   ├── dataset.py
+│   │   # 读取 field_map / structure_mask / structure.json
+│   │   # 组装 phys_cond = [source_index, source_period, eps_r]
+│   │
+│   ├── model.py
+│   │   # ConditionalDDPM、U-Net、HelmholtzPhysicsLoss 原型
+│   │
+│   ├── train.py
+│   │   # 训练入口
+│   │   # 包含 train/val 切分、best_model 保存、训练与验证损失输出
+│   │
+│   └── visualize_val_prediction.py
+│       # 加载 best_model.pth
+│       # 对验证集样本输出 GT / Pred / Error 六联图
+│
+├── examples/
+│   ├── preview_setup.py
+│   │   # 场景预览：显示源、散射体、探测器的空间布局
+│   │
+│   └── test_forward_surrogate.py
+│       # 正向代理测试或可视化脚本（按你实际文件内容说明）
+│
+├── models/
+│   └── fdtd_regressor.py
+│       # 逆向设计方向原型
+│       # 当前保留为后续扩展，不作为主训练链主入口
+│
+└── run_pipeline.py
+    # 总开关：控制 physics_test / data_gen / training / inference                      
 ```
 
 ## 3. 快速运行指南 (Quick Start) ##
