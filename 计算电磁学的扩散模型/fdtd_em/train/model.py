@@ -99,9 +99,13 @@ class ConditionalDDPM(nn.Module):
         alpha_bar_t = self.alpha_bar[t].view(-1, 1, 1, 1)
         xt = torch.sqrt(alpha_bar_t) * x0 + torch.sqrt(1 - alpha_bar_t) * noise
 
-        # 3. 拼接图像条件，给 U-Net 预测噪声
-        # 注意：此处你可以将 phys_cond (1D 向量) 融入 U-Net 时间嵌入，此处简化为只拼图像
-        net_input = torch.cat([xt, img_cond], dim=1)
+        # 3. 编码物理条件，并扩展成特征图
+        phys_feat = self.phys_mlp(phys_cond)                            # [B, 16]
+        phys_feat = phys_feat[:, :, None, None]                         # [B, 16, 1, 1]
+        phys_feat = phys_feat.expand(-1, -1, xt.shape[2], xt.shape[3])  # [B, 16, H, W]
+
+        # 拼接图像条件 + 物理条件
+        net_input = torch.cat([xt, img_cond, phys_feat], dim=1)
         pred_noise = self.network(net_input, t)
 
         # 4. 数据拟合损失 (Data Loss - MSE)
@@ -130,13 +134,21 @@ class ConditionalDDPM(nn.Module):
         基于条件的逆向去噪采样过程 (推演物理分布)
         """
         B = img_cond.shape[0]
+
+        if phys_cond is None:
+            raise ValueError("phys_cond must be provided for conditional sampling.")
+
         x = torch.randn((B, self.target_dim, img_cond.shape[2], img_cond.shape[3]), device=self.device)
 
         for t in reversed(range(self.n_steps)):
             t_tensor = torch.full((B,), t, device=self.device, dtype=torch.long)
 
-            # 拼接结构图作为条件引导
-            net_input = torch.cat([x, img_cond], dim=1)
+            phys_feat = self.phys_mlp(phys_cond)                          # [B, 16]
+            phys_feat = phys_feat[:, :, None, None]                       # [B, 16, 1, 1]
+            phys_feat = phys_feat.expand(-1, -1, x.shape[2], x.shape[3])  # [B, 16, H, W]
+
+            # 拼接结构图 + 物理条件作为条件引导
+            net_input = torch.cat([x, img_cond, phys_feat], dim=1)
             pred_noise = self.network(net_input, t_tensor)
 
             alpha_t = self.alpha[t]
