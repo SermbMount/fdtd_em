@@ -75,13 +75,13 @@ def run_single_simulation(sample_id, output_dir, device="cuda"):
     os.makedirs(sample_path, exist_ok=True)
 
     # 7. 落盘保存 (含 Matplotlib 出图)
-    
+
     # 7.1 保存真实电磁场数据张量 [2, H, W]
     field_map_tensor = torch.tensor(combined_field, dtype=torch.float32)
     torch.save(field_map_tensor, os.path.join(sample_path, "field_map.pt"))
 
     # 7.2 保存 2D 介质掩码作为条件标签
-    structure_slice = mask[:, :, cfg.Nz // 2].cpu().numpy() * eps_r_val
+    structure_slice = mask.any(dim=2).float().cpu().numpy() * eps_r_val
     np.save(os.path.join(sample_path, "structure_mask.npy"), structure_slice)
 
     # 7.3 生成并保存对比图
