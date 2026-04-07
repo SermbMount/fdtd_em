@@ -80,8 +80,12 @@ def run_single_simulation(sample_id, output_dir, device="cuda"):
     field_map_tensor = torch.tensor(combined_field, dtype=torch.float32)
     torch.save(field_map_tensor, os.path.join(sample_path, "field_map.pt"))
 
-    # 7.2 保存 2D 介质掩码作为条件标签
-    structure_slice = mask.any(dim=2).float().cpu().numpy() * eps_r_val
+    # 7.2 保存 2D 真实介电常数图作为条件标签
+    structure_slice = mask.any(dim=2).float().cpu().numpy()
+
+    # 背景设为 1.0，结构区域设为 eps_r_val
+    structure_slice[structure_slice > 0] = eps_r_val
+    structure_slice[structure_slice == 0] = 1.0
     np.save(os.path.join(sample_path, "structure_mask.npy"), structure_slice)
 
     # 7.3 生成并保存对比图
