@@ -8,16 +8,18 @@ import subprocess
 class PipelineConfig:
     #  执行开关 (True 表示执行，False 表示跳过)s
     # Step 1: 物理引擎单次测试 (验证 FDTD 求解器与 CUDA 加速合理性)
-    RUN_PHYSICS_TEST = True
+    RUN_PHYSICS_TEST = False
     # Step 2: 批量生成训练数据集
     RUN_DATA_GEN =False
     # Step 3: 训练条件扩散模型
-    RUN_TRAINING = False
+    RUN_TRAINING = True
     # Step 4: 逆向设计推理与结果可视化
-    RUN_INFERENCE = True
+    RUN_INFERENCE = False
+    # Step 5: 验证样本 GT / Pred / Error 可视化
+    RUN_VAL_VIS = False
+
 
 # 自动化调度脚本
-
 def run_command(command, step_name):
     print(f"\n{'=' * 60}")
     print(f" [执行阶段] : {step_name}")
@@ -75,6 +77,14 @@ def main():
                     "Step 4: 逆向设计推理出图与可视化对比")
     else:
         print("[跳过] Step 4: 逆向设计推理与可视化")
+
+    # Step 5: 验证样本 GT / Pred / Error 可视化
+    if PipelineConfig.RUN_VAL_VIS:
+        print("\n【Step 5: 验证样本预测与误差可视化】")
+        from fdtd_em.train.visualize_val_prediction import main as run_val_vis
+        run_val_vis()
+    else:
+        print("【跳过】 Step 5: 验证样本预测与误差可视化")
 
     total_time = time.time() - total_start
     print(f"\n执行完毕！所有任务均已成功。(总耗时: {total_time:.2f} 秒)")
