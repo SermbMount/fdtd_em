@@ -61,12 +61,22 @@ class ConditionalDDPM(nn.Module):
         super().__init__()
         self.n_steps = n_steps
         self.device = device
-        self.target_dim = target_dim  # 输出的通道数（如双通道场图=2，单通道结构图=1）
+        self.target_dim = target_dim
 
-        # 建立去噪网络：输入为 [当前加噪图 + 条件结构图] 的通道拼接
-        self.network = UNet(in_channels=target_dim + cond_dim, out_channels=target_dim)
+        # 物理条件向量编码器：phys_cond = [src_idx, src_period, eps_r]
+        self.phys_embed_dim = 16
+        self.phys_mlp = nn.Sequential(
+            nn.Linear(3, 32),
+            nn.GELU(),
+            nn.Linear(32, self.phys_embed_dim),
+        )
 
-        # 物理损失计算器
+        # 输入通道 = 当前噪声图 + 结构条件图 + 物理条件特征图
+        self.network = UNet(
+            in_channels=target_dim + cond_dim + self.phys_embed_dim,
+            out_channels=target_dim
+        )
+
         self.physics_loss_fn = HelmholtzPhysicsLoss()
 
         # DDPM 的 Beta Schedule 设定
