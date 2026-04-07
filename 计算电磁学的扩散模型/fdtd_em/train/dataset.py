@@ -29,7 +29,7 @@ class MyDataset(Dataset):
                 stats = json.load(f)
             return stats["min"], stats["max"]
 
-        print("[Dataset] 首次加载，正在计算全局场图统计量用于归一化 (可能需要几秒钟)...")
+        print("[Dataset] 首次加载，正在计算全局场图统计量用于归一化...")
         global_min = float('inf')
         global_max = float('-inf')
 
@@ -64,34 +64,39 @@ class MyDataset(Dataset):
         sample_dir = self.sample_dirs[idx]
 
         # 1. 读取 JSON
-        with open(os.path.join(sample_dir, "structure.json"), "r") as f:
+        json_path = os.path.join(sample_dir, "structure.json")
+        with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        src_idx = float(data["source_index"]) / cfg.Nx
-        src_period = float(data["source_period"]) / cfg.src_period_max
-        phys_cond = torch.tensor([src_idx, src_period], dtype=torch.float32)
+        # 2. 读取 structure_mask.npy，而不是自己重建结构图
+        structure_path = os.path.join(sample_dir, "structure_mask.npy")
+        if not os.path.exists(structure_path):
+            raise FileNotFoundError(f"Missing structure mask: {structure_path}")
 
-        # 2. 绘制结构图 (Target) [保持原有的介电常数归一化]
-        structure_map = np.ones((self.grid_size, self.grid_size), dtype=np.float32)
-        y, x = np.ogrid[0:self.grid_size, 0:self.grid_size]
-        mask = (x - data["center"][0]) ** 2 + (y - data["center"][1]) ** 2 <= data["radius"] ** 2
-        structure_map[mask] = data["eps_r"]
+        structure_map = np.load(structure_path).astype(np.float32)
 
-        norm_structure = 2.0 * (torch.from_numpy(structure_map) - 1.0) / (cfg.eps_r_max - 1.0) - 1.0
-        norm_structure = norm_structure.unsqueeze(0)  # [1, H, W]
+        # 如果保存的是 [H, W]，转成 [1, H, W]
+        norm_structure = torch.from_numpy(structure_map).float().unsqueeze(0)
 
-        # 3. 读取场图 (支持多通道加载)
+        # 结构图归一化到 [-1, 1]
+        # 当前生成器里 structure_slice = mask * eps_r_val
+        # 背景是 0，目标区域是 eps_r
+        norm_structure = 2.0 * norm_structure / cfg.eps_r_max - 1.0
+
+        # 3. 读取场图
         field_map_path = os.path.join(sample_dir, "field_map.pt")
-        if os.path.exists(field_map_path):
-            field_map = torch.load(field_map_path, weights_only=True)
-        else:
-            field_map = torch.from_numpy(np.load(os.path.join(sample_dir, "field_map.npy")))
+        if not os.path.exists(field_map_path):
+            raise FileNotFoundError(f"Missing field map: {field_map_path}")
 
-        # 确保是 [C, H, W] 格式
+        field_map = torch.load(field_map_path, weights_only=True)
+
+        # 确保为 [C, H, W]
         if field_map.dim() == 2:
             field_map = field_map.unsqueeze(0)
 
-        # 插值对齐
+        field_map = field_map.float()
+
+        # 插值对齐到统一尺寸
         field_map = F.interpolate(
             field_map.unsqueeze(0),
             size=(self.grid_size, self.grid_size),
@@ -99,8 +104,14 @@ class MyDataset(Dataset):
             align_corners=False
         ).squeeze(0)
 
-        # --- [新增] 场图严格归一化至 [-1, 1] 空间 ---
-        # 公式: 2 * (x - min) / (max - min) - 1
+        # 4. 物理条件向量
+        src_idx = float(data["source_index"]) / cfg.Nx
+        src_period = float(data["source_period"]) / cfg.src_period_max
+        eps_r = float(data["eps_r"]) / cfg.eps_r_max
+
+        phys_cond = torch.tensor([src_idx, src_period, eps_r], dtype=torch.float32)
+
+        # 5. 场图归一化到 [-1, 1]
         field_map = 2.0 * (field_map - self.field_min) / (self.field_max - self.field_min) - 1.0
 
         return field_map, norm_structure, phys_cond
