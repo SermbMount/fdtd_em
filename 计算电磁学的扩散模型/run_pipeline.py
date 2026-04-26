@@ -8,18 +8,21 @@ import subprocess
 class PipelineConfig:
     #  执行开关 (True 表示执行，False 表示跳过)s
     # Step 1: 物理引擎单次测试 (验证 FDTD 求解器与 CUDA 加速合理性)
-    RUN_PHYSICS_TEST = False
+    RUN_PHYSICS_TEST = True
     # Step 2: 批量生成训练数据集
     RUN_DATA_GEN =False
     # Step 3: 训练条件扩散模型
-    RUN_TRAINING = True
+    RUN_TRAINING = False
     # Step 4: 逆向设计推理与结果可视化
     RUN_INFERENCE = False
     # Step 5: 验证样本 GT / Pred / Error 可视化
     RUN_VAL_VIS = False
 
 
+
+
 # 自动化调度脚本
+
 def run_command(command, step_name):
     print(f"\n{'=' * 60}")
     print(f" [执行阶段] : {step_name}")
