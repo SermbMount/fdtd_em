@@ -6,13 +6,7 @@ import fdtd
 @dataclass
 class SimulationConfig:
     """
-    ============================================================
     Global simulation configuration (single source of truth)
-    ============================================================
-
-    所有仿真参数必须集中在这里：
-    - 保证可复现
-    - 方便存 metadata
     """
 
     # ------------------------------------------------------------
@@ -57,9 +51,9 @@ class SimulationConfig:
     n_arrays_estimate：
         GPU 上“常驻”的 3D tensor 数量估计
         典型构成：
-        - 6 个场量 Ex Ey Ez Hx Hy Hz
-        - 材料系数（εr / σ / 更新系数）
-        - PML 辅助变量
+        6 个场量 Ex Ey Ez Hx Hy Hz
+        材料系数（εr / σ / 更新系数）
+        PML 辅助变量
     """
     execution_mode: str = "local"# "local" or "server"
 
