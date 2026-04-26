@@ -83,7 +83,7 @@ class DiffusionInverseSolver:
 
 # ================= 测试脚本 =================
 if __name__ == "__main__":
-    
+    # 演示：从数据集中抽取一个真实的场图作为“需求”，让求解器设计出结构
     solver = DiffusionInverseSolver()
 
     # 获取一个测试数据
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     test_files = [p for p in Path(samples_dir).iterdir() if p.is_dir()]
     dataset = MyDataset(test_files[:1])  # 取第一个
 
-    # 模拟“提供的目标场图” (从真实的 Dataset 中取出来的原本是 [-1,1] 的，我们要假装它是物理量)
+    # 模拟“客户提供的目标场图” (从真实的 Dataset 中取出来的原本是 [-1,1] 的，我们要假装它是物理量)
     target_field_norm, gt_structure, phys_cond = dataset[0]
 
     # 转换为物理电场 V/m 作为输入目标
