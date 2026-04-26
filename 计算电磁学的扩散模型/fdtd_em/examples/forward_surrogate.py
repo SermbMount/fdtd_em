@@ -43,7 +43,7 @@ def denormalize_field(field_tensor, f_min, f_max):
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"启动正向物理预测测试 | 设备: {device}")
+    print(f"🚀 启动正向物理预测测试 | 设备: {device}")
 
     # 1. 加载最新的模型和数据
     latest_ckpt_dir = find_latest_checkpoint()
@@ -55,7 +55,7 @@ def main():
     # 获取测试样本
     test_files = [p for p in data_dir.iterdir() if p.is_dir()]
     if not test_files:
-        print(" 数据集目录下没有找到样本！")
+        print("❌ 数据集目录下没有找到样本！")
         return
     test_files = test_files[:4]
 
